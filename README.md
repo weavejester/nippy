@@ -2,8 +2,10 @@ Current [semantic](http://semver.org/) version:
 
 ```clojure
 [com.taoensso/nippy "1.2.1"]        ; Stable
-[com.taoensso/nippy "1.3.0-alpha3"] ; Development (adds crypto support!)
+[com.taoensso/nippy "1.3.0-alpha4"] ; Dev (crypto support, better API, improved perf)
 ```
+
+Note that while 1.3.x _is_ backwards compatible with earlier versions, the `freeze-to-bytes`/`thaw-from-bytes` API has been **deprecated in favor of `freeze`/`thaw`**.
 
 # Nippy, a Clojure serialization library
 
@@ -83,14 +85,14 @@ nippy/stress-data
 Serialize it:
 
 ```clojure
-(def frozen-stress-data (nippy/freeze-to-bytes nippy/stress-data))
+(def frozen-stress-data (nippy/freeze nippy/stress-data))
 => #<byte[] [B@3253bcf3>
 ```
 
 Deserialize it:
 
 ```clojure
-(nippy/thaw-from-bytes frozen-stress-data)
+(nippy/thaw frozen-stress-data)
 => {:bytes        (byte-array [(byte 1) (byte 2) (byte 3)])
     :nil          nil
     :boolean      true
@@ -104,8 +106,8 @@ Couldn't be simpler!
 As of 1.3.0, Nippy also gives you **dead simple data encryption**. Add a single option to your usual freeze/thaw calls like so:
 
 ```clojure
-(nippy/freeze-to-bytes nippy/stress-data :password [:salted "my-password"]) ; Encrypt
-(nippy/thaw-from-bytes <encrypted-data>  :password [:salted "my-password"]) ; Decrypt
+(nippy/freeze nippy/stress-data :password [:salted "my-password"]) ; Encrypt
+(nippy/thaw   <encrypted-data>  :password [:salted "my-password"]) ; Decrypt
 ```
 
 There's two forms of encryption on offer: `:salted` and `:cached`. Each of these makes carefully-chosen trade-offs and is suited to one of two common use cases. See the `aes128-salted` and `aes128-cached` [docstrings](http://ptaoussanis.github.io/nippy/taoensso.nippy.crypto.html) for a detailed explanation of why/when you'd want one or the other.
