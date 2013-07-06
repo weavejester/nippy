@@ -24,6 +24,17 @@
    (byte 2) {:version 1 :compressed? false :encrypted? true}
    (byte 3) {:version 1 :compressed? true  :encrypted? true}})
 
+[;;(vec (.getBytes "NPY" "US_ASCII"))
+ (vec (.getBytes "NPY" "US-ASCII"))
+ (vec (.getBytes "NPY" "UTF-8"))
+ (vec (.getBytes "NPY" "UTF8"))]
+;; -Dfile.encoding=UTF-8
+;; (System/getProperty "sun.jnu.encoding")
+;; (keys (into {}  (System/getProperties)))
+
+;; (thaw (byte-array [(byte 0) (byte 3) (byte 8) (byte 9) (byte 12)]))
+;; (thaw (byte-array [(byte 0) (byte 3) (byte 8) (byte 9)]))
+
 ;;;; Data type IDs
 
 ;;                              1
@@ -263,7 +274,7 @@
      (throw (Exception. (str "Failed to thaw unknown type ID: " type-id))))))
 
 (defn- try-parse-header [ba]
-  (println "Parsing `thaw` header: "
+  #_(println "Parsing `thaw` header: "
            (let [head-ba (first (utils/ba-split ba 4))]
              {:head-ba (vec head-ba)
               :sig*-match? (utils/ba= (first (utils/ba-split head-ba 3))

@@ -87,9 +87,13 @@
 (defn ba-split [^bytes ba ^Integer idx]
   (let [s (alength ba)]
     (when (> s idx)
-      [(java.util.Arrays/copyOfRange ba 0 idx)
+      [;;(java.util.Arrays/copyOfRange ba 0 idx)
+       (java.util.Arrays/copyOf ba idx)
        (java.util.Arrays/copyOfRange ba idx s)])))
 
 (comment (String. (ba-concat (.getBytes "foo") (.getBytes "bar")))
          (let [[x y] (ba-split (.getBytes "foobar") 5)]
            [(String. x) (String. y)]))
+
+(let [ba (.getBytes "foobar")]
+  (time (dotimes [_ 100000] (ba-split ba 5))))
