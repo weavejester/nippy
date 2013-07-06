@@ -156,6 +156,11 @@
 (def ^:private head-meta-id (reduce-kv #(assoc %1 %3 %2) {} head-meta))
 
 (defn- wrap-header [data-ba metadata]
+  (println "Wrapping `freeze` header: "
+           (let [meta-id (head-meta-id (assoc metadata :version head-version))]
+             {:metadata metadata
+              :meta-id  meta-id
+              :head-ba  (vec (utils/ba-concat head-sig (byte-array [meta-id])))}))
   (if-let [meta-id (head-meta-id (assoc metadata :version head-version))]
     (let [head-ba (utils/ba-concat head-sig (byte-array [meta-id]))]
       (utils/ba-concat head-ba data-ba))
@@ -258,6 +263,14 @@
      (throw (Exception. (str "Failed to thaw unknown type ID: " type-id))))))
 
 (defn- try-parse-header [ba]
+  (println "Parsing `thaw` header: "
+           (let [head-ba (first (utils/ba-split ba 4))]
+             {:head-ba (vec head-ba)
+              :sig*-match? (utils/ba= (first (utils/ba-split head-ba 3))
+                                      head-sig)
+              :head-meta
+              (let [[head-sig* [meta-id]] (utils/ba-split head-ba 3)]
+                (head-meta meta-id {:unrecognized-header? true}))}))
   (when-let [[head-ba data-ba] (utils/ba-split ba 4)]
     (let [[head-sig* [meta-id]] (utils/ba-split head-ba 3)]
       (when (utils/ba= head-sig* head-sig)
@@ -278,6 +291,7 @@
   (let [ex (fn [msg & [e]] (throw (Exception. (str "Thaw failed: " msg) e)))
         try-thaw-data
         (fn [data-ba {:keys [compressed? encrypted?] :as head-meta}]
+          (println "Trying thaw: " head-meta)
           (let [password   (when encrypted? password) ; => also head-meta
                 compressor (if head-meta
                              (when compressed? compressor)
@@ -394,3 +408,18 @@
   (thaw ba {:legacy-opts  {:compressed? compressed?}
             :read-eval?   read-eval?
             :password     nil}))
+
+;;;; TODO adityo debugging
+
+(comment
+  (def frozen-stress-data (freeze stress-data))
+  (thaw frozen-stress-data)
+  (thaw (freeze "test" )) ; okay
+  (thaw (freeze stress-data {:compressor nil})) ; crash (!?)
+  (thaw (freeze stress-data {:legacy-mode true})) ; fine (!?)
+
+  (binding [*read-eval* false]
+    (thaw (freeze stress-data {:legacy-mode true})) ; Reader crash?
+    )
+
+  )
