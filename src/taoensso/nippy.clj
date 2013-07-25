@@ -7,7 +7,7 @@
              (compression :as compression :refer (snappy-compressor))
              (encryption  :as encryption  :refer (aes128-encryptor))])
   (:import  [java.io DataInputStream DataOutputStream ByteArrayOutputStream
-             ByteArrayInputStream]
+             ByteArrayInputStream EOFException]
             [clojure.lang Keyword BigInt Ratio PersistentQueue PersistentTreeMap
              PersistentTreeSet IPersistentList IPersistentVector IPersistentMap
              IPersistentSet IPersistentCollection]))
@@ -15,11 +15,11 @@
 ;;;; Nippy 2.x+ header spec (4 bytes)
 (def ^:private ^:const head-version 1)
 (def ^:private head-sig (.getBytes "NPY" "UTF-8"))
-(def ^:private head-meta "Final byte stores version-dependent metadata."
-  {(byte 0) {:version 1 :compressed? false :encrypted? false}
-   (byte 1) {:version 1 :compressed? true  :encrypted? false}
-   (byte 2) {:version 1 :compressed? false :encrypted? true}
-   (byte 3) {:version 1 :compressed? true  :encrypted? true}})
+(def ^:private ^:const head-meta "Final byte stores version-dependent metadata."
+  {(int 0) {:version 1 :compressed? false :encrypted? false}
+   (int 1) {:version 1 :compressed? true  :encrypted? false}
+   (int 2) {:version 1 :compressed? false :encrypted? true}
+   (int 3) {:version 1 :compressed? true  :encrypted? true}})
 
 ;;;; Data type IDs
 
@@ -76,6 +76,16 @@
 
 (defmacro ^:private write-biginteger [s x] `(write-bytes ~s (.toByteArray ~x)))
 (defmacro ^:private write-utf8       [s x] `(write-bytes ~s (.getBytes ~x "UTF-8")))
+
+(def      ^:private head-meta-id (reduce-kv #(assoc %1 %3 %2) {} head-meta))
+(defmacro ^:private write-header [s metadata]
+  `(let [s# ~s
+         metadata# ~metadata]
+     (if-let [meta-id# (head-meta-id (assoc metadata# :version head-version))]
+       (do (.write     s# head-sig 0 3)
+           (.writeByte s# meta-id#))
+       (throw (Exception. (str "Unrecognized header metadata: " metadata#))))))
+
 (defmacro ^:private freeze-to-stream
   "Like `freeze-to-stream*` but with metadata support."
   [x s]
@@ -150,17 +160,6 @@
 ;; Use Clojure's own reader as final fallback
 (freezer Object id-reader (write-bytes s (.getBytes (pr-str x) "UTF-8")))
 
-(def ^:private head-meta-id (reduce-kv #(assoc %1 %3 %2) {} head-meta))
-
-(defn- wrap-header [data-ba metadata]
-  (if-let [meta-id (head-meta-id (assoc metadata :version head-version))]
-    (let [head-ba (utils/ba-concat head-sig (byte-array [meta-id]))]
-      (utils/ba-concat head-ba data-ba))
-    (throw (Exception. (str "Unrecognized header metadata: " metadata)))))
-
-(comment (wrap-header (.getBytes "foo") {:compressed? true
-                                         :encrypted?  false}))
-
 (declare assert-legacy-args)
 
 (defn freeze
@@ -172,14 +171,18 @@
                        encryptor  aes128-encryptor}}]]
   (when legacy-mode (assert-legacy-args compressor password))
   (let [ba     (ByteArrayOutputStream.)
-        stream (DataOutputStream. ba)]
+        stream (DataOutputStream. ba)] ; TODO Allow :input arg (baos, dos, etc.)
+    (when-not legacy-mode (write-header stream {:compressed? (boolean compressor)
+                                                :encrypted?  (boolean password)}))
     (binding [*print-dup* print-dup?] (freeze-to-stream x stream))
     (let [ba (.toByteArray ba)
           ba (if compressor (compression/compress compressor ba) ba)
           ba (if password   (encryption/encrypt encryptor password ba) ba)]
-      (if legacy-mode ba
-        (wrap-header ba {:compressed? (boolean compressor)
-                         :encrypted?  (boolean password)})))))
+      ba)))
+
+(comment ; TODO
+  (thaw (freeze "boo" ))
+  (thaw (freeze "boo" {:legacy-mode true})))
 
 ;;;; Thawing
 
@@ -193,6 +196,18 @@
 
 (defmacro ^:private read-biginteger [s] `(BigInteger. (read-bytes ~s)))
 (defmacro ^:private read-utf8       [s] `(String. (read-bytes ~s) "UTF-8"))
+
+(defmacro ^:private read-header-maybe [s]
+  `(let [s# ~s]
+     (.mark s# 4)
+     (let [head-sig*# (let [ba# (byte-array 3)]
+                        (try (.readFully s# ba# 0 3) ba#
+                             (catch EOFException _# nil)))]
+
+       (if-not (utils/ba= head-sig*# head-sig)
+         (do (.reset s#) nil)
+         (let [meta-id# (try (.readByte s#) (catch EOFException _# nil))]
+           (head-meta meta-id# {:unrecognized-header? true}))))))
 
 (defmacro ^:private coll-thaw "Thaws simple collection types."
   [s coll]
@@ -254,11 +269,11 @@
 
      (throw (Exception. (str "Failed to thaw unknown type ID: " type-id))))))
 
-(defn- try-parse-header [ba]
-  (when-let [[head-ba data-ba] (utils/ba-split ba 4)]
-    (let [[head-sig* [meta-id]] (utils/ba-split head-ba 3)]
-      (when (utils/ba= head-sig* head-sig)
-        [data-ba (head-meta meta-id {:unrecognized-header? true})]))))
+;; (defn- try-parse-header [ba]
+;;   (when-let [[head-ba data-ba] (utils/ba-split ba 4)]
+;;     (let [[head-sig* [meta-id]] (utils/ba-split head-ba 3)]
+;;       (when (utils/ba= head-sig* head-sig)
+;;         [data-ba (head-meta meta-id {:unrecognized-header? true})]))))
 
 (defn thaw
   "Deserializes frozen bytes to their original Clojure data type. Supports data
@@ -279,11 +294,13 @@
                 compressor (if head-meta
                              (when compressed? compressor)
                              (when (:compressed? legacy-opts) snappy-compressor))]
+            ;; TODO Would need support for STREAM compression+encryption
             (try
               (let [ba data-ba
                     ba (if password (encryption/decrypt encryptor password ba) ba)
                     ba (if compressor (compression/decompress compressor ba) ba)
                     stream (DataInputStream. (ByteArrayInputStream. ba))]
+                ;; TODO Allow :input arg (baos, dos, etc.)
                 (binding [*read-eval* read-eval?] (thaw-from-stream stream)))
               (catch Exception e
                 (cond
